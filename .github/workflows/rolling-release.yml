@@ -1,0 +1,107 @@
+name: Rolling Release (Windows)
+
+# Builds ringracers.exe on every push to master, bundles it with the official
+# v2.4 game assets, and publishes/refreshes a single "rolling" pre-release.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Only one rolling build at a time; newer pushes cancel in-progress runs.
+concurrency:
+  group: rolling-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  PRESET: ninja-x64_windows_vcpkg-develop
+  ASSETS_URL: https://github.com/KartKrewDev/RingRacers/releases/download/v2.4/Dr.Robotnik.s-Ring-Racers-v2.4-Assets.zip
+  ROLLING_TAG: rolling
+  # Use the GitHub Actions cache as a vcpkg binary cache.
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # comptime.h wants full history for the revision string
+
+      - name: Export GitHub Actions cache environment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Build ringracers.exe
+        shell: pwsh
+        run: |
+          # windows-latest ships VS 2022 (with the Clang toolset) and vcpkg at
+          # C:\vcpkg with VCPKG_ROOT already set. The build script imports the
+          # VS environment itself.
+          ./scripts/build-windows.ps1 -Preset $env:PRESET -NoDeploy
+
+      - name: Cache game assets download
+        id: assets-cache
+        uses: actions/cache@v4
+        with:
+          path: assets.zip
+          key: ringracers-assets-${{ hashFiles('.github/workflows/rolling-release.yml') }}
+
+      - name: Download game assets
+        if: steps.assets-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: Invoke-WebRequest -Uri $env:ASSETS_URL -OutFile assets.zip
+
+      - name: Assemble release package
+        id: package
+        shell: pwsh
+        run: |
+          $stage = "package"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+
+          # Official assets zip already has the layout the game expects
+          # (bios.pk3, patch.pk3, data/*.pk3, music pk3s).
+          Expand-Archive -Path assets.zip -DestinationPath $stage -Force
+
+          Copy-Item "build/$env:PRESET/bin/ringracers.exe" $stage -Force
+
+          $short = "${{ github.sha }}".Substring(0, 7)
+          $zip = "ringracers-rolling-windows-x64-$short.zip"
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          "zip=$zip"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "short=$short" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Publish rolling release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $short = "${{ steps.package.outputs.short }}"
+          $zip   = "${{ steps.package.outputs.zip }}"
+          $date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm 'UTC'")
+          $notes = @"
+          Automated rolling build of ``master``.
+
+          - Commit: ${{ github.sha }}
+          - Built: $date
+          - Includes the official Dr. Robotnik's Ring Racers v2.4 game assets.
+
+          Extract the zip and run ``ringracers.exe``.
+          "@
+
+          # Recreate the release so the tag follows the latest commit.
+          # The delete is best-effort: there is nothing to remove on the first run.
+          try { gh release delete $env:ROLLING_TAG --cleanup-tag --yes 2>$null }
+          catch { Write-Host "No existing rolling release to delete." }
+          gh release create $env:ROLLING_TAG $zip `
+            --title "Rolling Build ($short)" `
+            --notes "$notes" `
+            --prerelease `
+            --target ${{ github.sha }}

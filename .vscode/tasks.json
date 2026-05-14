@@ -1,0 +1,66 @@
+{
+	// Build tasks for Dr. Robotnik's Ring Racers (Windows / clang-cl + vcpkg).
+	// See scripts/build-windows.ps1 for the underlying logic.
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build + Deploy to testing",
+			"detail": "Build ringracers.exe and copy it into ./testing",
+			"type": "process",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/scripts/build-windows.ps1"
+			],
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": ["$gcc", "$msCompile"],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared",
+				"clear": true
+			}
+		},
+		{
+			"label": "Configure + Build + Deploy to testing",
+			"detail": "Force a CMake re-configure, then build and deploy",
+			"type": "process",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/scripts/build-windows.ps1",
+				"-Configure"
+			],
+			"group": "build",
+			"problemMatcher": ["$gcc", "$msCompile"],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared",
+				"clear": true
+			}
+		},
+		{
+			"label": "Clean rebuild + Deploy to testing",
+			"detail": "Delete the build directory, then configure, build and deploy",
+			"type": "process",
+			"command": "powershell.exe",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy", "Bypass",
+				"-File", "${workspaceFolder}/scripts/build-windows.ps1",
+				"-Clean"
+			],
+			"group": "build",
+			"problemMatcher": ["$gcc", "$msCompile"],
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared",
+				"clear": true
+			}
+		}
+	]
+}
