@@ -17,6 +17,7 @@
 
 #include "../doomtype.h"
 #include "../command.h"
+#include "../m_fixed.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -122,6 +123,35 @@ stereorect_t R_StereoComputePlayerEyeRect(INT32 mode, INT32 eye, INT32 player_id
 /// content drawn by Lua HUD scripts — no separate crosshair-depth cvar; see
 /// the comment above for why.)
 FLOAT R_GetStereoHUDShiftPixelsForEyePass(INT32 pass_idx);
+
+/// Per-eye horizontal shift in BASEVIDWIDTH coords (FRACUNIT) for a 2D tag
+/// that should appear at the same 3D depth as a world point at distance
+/// `depth_wu` from the camera. Adding this to the tag's mono base-coord X
+/// puts it at the correct stereo disparity for `eye_pass` — but ONLY when
+/// the caller also locks the draw to that eye via R_SetStereoEyeLock, so the
+/// other eye's view ignores this version. Returns 0 when stereo is inactive
+/// or `depth_wu` is non-positive.
+///
+/// Formula: half_disparity_ndc = (cot/aspect) * ipd * (focal - d) /
+/// (2 * focal * d). Sign convention: LEFT eye gets +half (point near focal
+/// shifts right in LEFT view = crossed parallax = near; far point shifts
+/// left = uncrossed = behind). Result is converted to base-coord pixels
+/// (× BASEVIDWIDTH/2) and to fixed_t.
+fixed_t R_GetStereoTagShiftBase(float depth_wu, INT32 pass_idx);
+
+/// Twodee eye-mask lock. While set to LEFT_ONLY / RIGHT_ONLY, any V_Draw*
+/// queued into g_2d gets tagged with that eye_mask and only renders during
+/// the matching eye pass. Setter returns the previous value so callers can
+/// stack/restore (typical pattern: prev = set(LEFT); draw; set(prev)).
+/// Numeric values match hwr2::kTwodeeEye* in twodee.hpp.
+enum
+{
+	STEREO_EYELOCK_BOTH  = 0,
+	STEREO_EYELOCK_LEFT  = 1,
+	STEREO_EYELOCK_RIGHT = 2,
+};
+INT32 R_GetStereoEyeLock(void);
+INT32 R_SetStereoEyeLock(INT32 mask); // returns previous value
 
 /// onchange callback for cv_stereomode. Warns when the renderer is not OpenGL
 /// (without snapping the value back — cv_stereomode is CV_SAVE and we want it

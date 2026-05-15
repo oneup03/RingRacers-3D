@@ -27,6 +27,19 @@
 namespace srb2::hwr2
 {
 
+// Eye affinity for a 2D command. When stereo 3D is active, the TwodeeRenderer
+// replays the merged command stream once per eye; commands tagged LEFT/RIGHT
+// only run during the matching eye pass. Lets tag-style draws (player tags,
+// nametag composites, prison Target reticle) be drawn at a per-eye horizontal
+// offset that matches the tagged mobj's actual world depth — without needing
+// a separate 3D-billboard renderer.
+enum : uint8_t
+{
+	kTwodeeEyeBoth  = 0,
+	kTwodeeEyeLeft  = 1,
+	kTwodeeEyeRight = 2,
+};
+
 struct TwodeeVertex
 {
 	float x;
@@ -66,6 +79,7 @@ struct Draw2dPatchQuad
 	bool clip = false;
 	bool flip = false;
 	bool vflip = false;
+	uint8_t eye_mask = kTwodeeEyeBoth;
 };
 
 struct Draw2dVertices
@@ -76,6 +90,7 @@ struct Draw2dVertices
 	BlendMode blend = BlendMode::kAlphaTransparent;
 	lumpnum_t flat_lump = UINT32_MAX; // LUMPERROR but not loading w_wad.h from this header
 	bool lines = false;
+	uint8_t eye_mask = kTwodeeEyeBoth;
 };
 
 using Draw2dCmd = std::variant<Draw2dPatchQuad, Draw2dVertices>;

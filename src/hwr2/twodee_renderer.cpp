@@ -337,6 +337,14 @@ void TwodeeRenderer::flush(Rhi& rhi, Twodee& twodee)
 		merged_list.ibo = ibo;
 		merged_list.ibo_size = needed_ibo_size;
 
+		// Helper: pull the per-command eye affinity out of either variant.
+		auto eye_mask_for_cmd = [](const Draw2dCmd& c) -> uint8_t {
+			auto v = srb2::Overload {
+				[](const Draw2dPatchQuad& q) -> uint8_t { return q.eye_mask; },
+				[](const Draw2dVertices&  t) -> uint8_t { return t.eye_mask; }};
+			return std::visit(v, c);
+		};
+
 		MergedTwodeeCommand new_cmd;
 		new_cmd.index_offset = 0;
 		new_cmd.elements = 0;
@@ -345,6 +353,7 @@ void TwodeeRenderer::flush(Rhi& rhi, Twodee& twodee)
 		new_cmd.pipeline_key = pipeline_key_for_cmd(list.cmds[0]);
 		new_cmd.primitive = new_cmd.pipeline_key.lines ? PrimitiveType::kLines : PrimitiveType::kTriangles;
 		new_cmd.blend_mode = new_cmd.pipeline_key.blend;
+		new_cmd.eye_mask = eye_mask_for_cmd(list.cmds[0]);
 		merged_list.cmds.push_back(std::move(new_cmd));
 
 		for (auto& cmd : list.cmds)
@@ -353,6 +362,10 @@ void TwodeeRenderer::flush(Rhi& rhi, Twodee& twodee)
 			bool new_cmd_needed = false;
 			TwodeePipelineKey pk = pipeline_key_for_cmd(cmd);
 			new_cmd_needed = new_cmd_needed || (pk != merged_cmd.pipeline_key);
+			// Different eye affinity must split the batch — LEFT-only and
+			// RIGHT-only quads cannot share a draw call.
+			const uint8_t cmd_eye_mask = eye_mask_for_cmd(cmd);
+			new_cmd_needed = new_cmd_needed || (cmd_eye_mask != merged_cmd.eye_mask);
 
 			// We need to split the merged commands based on the kind of texture
 			// Patches are converted to atlas texture indexes, which we've just packed the patch rects for
@@ -428,6 +441,7 @@ void TwodeeRenderer::flush(Rhi& rhi, Twodee& twodee)
 				the_new_one.pipeline_key = pipeline_key_for_cmd(cmd);
 				the_new_one.primitive = the_new_one.pipeline_key.lines ? PrimitiveType::kLines : PrimitiveType::kTriangles;
 				the_new_one.blend_mode = the_new_one.pipeline_key.blend;
+				the_new_one.eye_mask = cmd_eye_mask;
 				merged_list.cmds.push_back(std::move(the_new_one));
 			}
 
@@ -568,6 +582,18 @@ void TwodeeRenderer::flush(Rhi& rhi, Twodee& twodee)
 					// Don't do anything for 0-element commands
 					// This shouldn't happen, but, just in case...
 					continue;
+				}
+				// Per-eye affinity. Commands tagged LEFT/RIGHT only render
+				// during the matching pass; eye_mask==0 (BOTH) always draws.
+				// The eye-pass index here matches R_BeginStereoEye(pass_idx):
+				// 0 = LEFT placement = kTwodeeEyeLeft (1).
+				if (cmd.eye_mask != 0)
+				{
+					const uint8_t pass_mask =
+						(eye_pass == 0) ? static_cast<uint8_t>(kTwodeeEyeLeft)
+						                : static_cast<uint8_t>(kTwodeeEyeRight);
+					if (cmd.eye_mask != pass_mask)
+						continue;
 				}
 				RasterizerStateDesc desc;
 				desc.cull = CullMode::kNone;

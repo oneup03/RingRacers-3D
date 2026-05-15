@@ -32,6 +32,9 @@
 #include "r_main.h"
 #include "st_stuff.h"
 #include "v_video.h"
+#ifdef HWRENDER
+#include "hardware/hw_stereo.h" // R_StereoActive, R_GetStereoTagShiftBase, R_SetStereoEyeLock
+#endif
 
 #ifdef WIN32
 #undef near
@@ -799,19 +802,59 @@ void K_DrawTargetTracking(const TargetTracking& target)
 
 		TargetTracking::Animation anim = target.animation();
 
-		for (patch_t** array : anim.layers)
+		auto drawLayers = [&](fixed_t xshift)
 		{
-			patch_t* patch = array[(leveltime / anim.tics_per_frame) % anim.frames];
+			for (patch_t** array : anim.layers)
+			{
+				patch_t* patch = array[(leveltime / anim.tics_per_frame) % anim.frames];
 
-			V_DrawFixedPatch(
-				targetPos.x - (((anim.video_flags &  V_FLIP) ? -1 : 1) * (patch->width  << (FRACBITS-1))),
-				targetPos.y - (((anim.video_flags & V_VFLIP) ? -1 : 1) * (patch->height << (FRACBITS-1))),
-				FRACUNIT,
-				V_SPLITSCREEN | anim.video_flags | trans,
-				patch,
-				colormap
-			);
+				V_DrawFixedPatch(
+					targetPos.x + xshift - (((anim.video_flags &  V_FLIP) ? -1 : 1) * (patch->width  << (FRACBITS-1))),
+					targetPos.y - (((anim.video_flags & V_VFLIP) ? -1 : 1) * (patch->height << (FRACBITS-1))),
+					FRACUNIT,
+					V_SPLITSCREEN | anim.video_flags | trans,
+					patch,
+					colormap
+				);
+			}
 		};
+
+#ifdef HWRENDER
+		// Stereo: render the on-screen tracker overlay (the Target reticle
+		// and similar patch layers from anim.layers) per-eye with a depth-
+		// derived X offset so it sits at the tagged mobj's actual world
+		// depth instead of the global HUD plane. Same approach as the
+		// player nametag path in K_DrawPlayerTag — TwodeeRenderer's
+		// eye_mask filter routes each version to its matching eye pass.
+		//
+		// Use the interpolated mobj position (matching K_ObjectTracking's
+		// snapshot) and the forward distance along the view direction
+		// (component along the view forward vector), not the horizontal
+		// Euclidean radius. For off-axis objects R_PointToDist2 would
+		// over-report the disparity-relevant depth, leaving the tag drifting
+		// to one side of its target at long range.
+		if (R_StereoActive() && target.mobj)
+		{
+			const fixed_t mx = R_InterpolateFixed(target.mobj->old_x, target.mobj->x);
+			const fixed_t my = R_InterpolateFixed(target.mobj->old_y, target.mobj->y);
+			const fixed_t cos_va = FINECOSINE(viewangle >> ANGLETOFINESHIFT);
+			const fixed_t sin_va = FINESINE(viewangle >> ANGLETOFINESHIFT);
+			fixed_t forward_d = FixedMul(mx - viewx, cos_va) + FixedMul(my - viewy, sin_va);
+			if (forward_d < 0) forward_d = -forward_d;
+			const float depth_wu = FIXED_TO_FLOAT(forward_d);
+			for (INT32 pass = 0; pass < 2; pass++)
+			{
+				const fixed_t shift = R_GetStereoTagShiftBase(depth_wu, pass);
+				const INT32 prev = R_SetStereoEyeLock(pass == 0 ? STEREO_EYELOCK_LEFT : STEREO_EYELOCK_RIGHT);
+				drawLayers(shift);
+				R_SetStereoEyeLock(prev);
+			}
+		}
+		else
+#endif
+		{
+			drawLayers(0);
+		}
 	}
 }
 

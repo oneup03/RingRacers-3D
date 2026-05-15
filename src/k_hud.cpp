@@ -5569,26 +5569,14 @@ static void K_DrawNameTagForPlayer(fixed_t x, fixed_t y, player_t *p, UINT32 fla
 
 playertagtype_t K_WhichPlayerTag(player_t *p)
 {
-	// Master gates apply to every tag type (LOCAL / RIVAL / CPU / NAME):
-	//
 	// cv_showpartytags — user toggle, off by default. The tags are
 	// permanently distracting clutter in normal play; turning them on is
-	// opt-in via Options → HUD.
-	//
-	// Stereo: tags are also suppressed here regardless of the cvar.
-	// K_ObjectTracking projects with a single mono frustum, and the
-	// resulting 2D coords are replayed into both eyes with a constant
-	// HUD-depth shift — so each tag sits at the wrong depth (uniform HUD
-	// plane instead of the tagged player's actual world depth) and the
-	// per-player-base-coord clip looks like the tag is cut off at the
-	// eye-viewport edge. Fixing properly would need per-eye projection +
-	// per-eye-specific 2D draws (twodee can't emit per-eye geometry today).
+	// opt-in via Options → HUD. In stereo 3D, K_DrawPlayerTag now wraps the
+	// per-type drawers in a per-eye-lock loop with a depth-derived X shift
+	// (see R_GetStereoTagShiftBase), so the tags sit at the tagged player's
+	// actual 3D depth instead of the global HUD plane.
 	if (!cv_showpartytags.value)
 		return PLAYERTAG_NONE;
-#ifdef HWRENDER
-	if (R_StereoActive())
-		return PLAYERTAG_NONE;
-#endif
 
 	const UINT8 cnum = R_GetViewNumber();
 
@@ -5625,7 +5613,7 @@ playertagtype_t K_WhichPlayerTag(player_t *p)
 	return PLAYERTAG_NONE;
 }
 
-void K_DrawPlayerTag(fixed_t x, fixed_t y, player_t *p, playertagtype_t type, boolean foreground)
+static void K_DrawPlayerTagOnce(fixed_t x, fixed_t y, player_t *p, playertagtype_t type, boolean foreground)
 {
 	INT32 flags = P_IsObjectFlipped(p->mo) ? (V_VFLIP|V_FLIP) : 0;
 
@@ -5665,6 +5653,47 @@ void K_DrawPlayerTag(fixed_t x, fixed_t y, player_t *p, playertagtype_t type, bo
 		default:
 			break;
 	}
+}
+
+void K_DrawPlayerTag(fixed_t x, fixed_t y, player_t *p, playertagtype_t type, boolean foreground)
+{
+#ifdef HWRENDER
+	// In stereo 3D, the tag's V_Draw output is replayed by TwodeeRenderer
+	// twice — once per eye. Drawing once at the mono-projected (x, y)
+	// lands the tag at the wrong depth (uniform HUD plane). Instead, queue
+	// each tag *twice* with per-eye X offsets matching the tagged mobj's
+	// real world depth: TwodeeRenderer's eye_mask filter ensures each
+	// version only renders in its target eye.
+	if (R_StereoActive() && p && p->mo)
+	{
+		// Use the interpolated mobj position so depth matches the same
+		// snapshot K_ObjectTracking used to compute the mono (x, y); a
+		// position-mismatched depth produces a stereo disparity that drifts
+		// against the object frame to frame.
+		const fixed_t mx = R_InterpolateFixed(p->mo->old_x, p->mo->x);
+		const fixed_t my = R_InterpolateFixed(p->mo->old_y, p->mo->y);
+		// Forward-distance (component along view direction), not the
+		// horizontal Euclidean distance — the off-axis frustum projection
+		// uses eye-space Z, which is the forward component. For off-axis
+		// objects the two differ enough to be visible; for straight-ahead
+		// objects they're equal.
+		const fixed_t cos_va = FINECOSINE(viewangle >> ANGLETOFINESHIFT);
+		const fixed_t sin_va = FINESINE(viewangle >> ANGLETOFINESHIFT);
+		fixed_t forward_d = FixedMul(mx - viewx, cos_va)
+		                  + FixedMul(my - viewy, sin_va);
+		if (forward_d < 0) forward_d = -forward_d; // behind the camera
+		const float depth_wu = FIXED_TO_FLOAT(forward_d);
+		for (INT32 pass = 0; pass < 2; pass++)
+		{
+			const fixed_t shift = R_GetStereoTagShiftBase(depth_wu, pass);
+			const INT32 prev = R_SetStereoEyeLock(pass == 0 ? STEREO_EYELOCK_LEFT : STEREO_EYELOCK_RIGHT);
+			K_DrawPlayerTagOnce(x + shift, y, p, type, foreground);
+			R_SetStereoEyeLock(prev);
+		}
+		return;
+	}
+#endif
+	K_DrawPlayerTagOnce(x, y, p, type, foreground);
 }
 
 typedef struct weakspotdraw_t

@@ -19,7 +19,8 @@
 #include "../doomstat.h" // r_splitscreen
 #include "../i_video.h"  // rendermode, render_opengl
 #include "../m_fixed.h"  // FIXED_TO_FLOAT
-#include "../r_main.h"   // cv_fov, R_FOV
+#include "../p_local.h"  // stplyr (for fovadd)
+#include "../r_main.h"   // cv_fov, R_FOV, viewssnum
 #include "../screen.h"   // cv_renderer
 
 // CVARs are defined alongside the other OpenGL cvars in cvars.cpp (so they
@@ -127,6 +128,108 @@ FLOAT R_GetStereoIOD(void)
 FLOAT R_GetStereoFocal(void)
 {
 	return (FLOAT)cv_stereofocallength.value;
+}
+
+// Twodee eye-mask lock. See R_SetStereoEyeLock in the header. Static-global
+// is fine: only the main thread queues into g_2d, and the lock is bracket-
+// scoped around each per-eye draw burst (prev = set(LEFT); draws; set(prev)).
+static INT32 s_stereo_eye_lock = 0; // kTwodeeEyeBoth
+
+extern "C" INT32 R_GetStereoEyeLock(void)
+{
+	return s_stereo_eye_lock;
+}
+
+extern "C" INT32 R_SetStereoEyeLock(INT32 mask)
+{
+	const INT32 prev = s_stereo_eye_lock;
+	s_stereo_eye_lock = mask;
+	return prev;
+}
+
+fixed_t R_GetStereoTagShiftBase(float depth_wu, INT32 pass_idx)
+{
+	if (!R_StereoActive() || depth_wu <= 0.0f)
+		return 0;
+
+	const FLOAT ipd = (FLOAT)cv_stereoipd.value * 0.1f;
+	const FLOAT focal = (FLOAT)cv_stereofocallength.value;
+	if (ipd <= 0.0f || focal <= 0.0f)
+		return 0;
+
+	// Match SetTransform's projection: it calls GLPerspective(used_fov, aspect)
+	// where aspect is ASPECT_RATIO (defined as 1.0f in r_opengl.cpp — NOT
+	// 320/200, despite the BASEVIDWIDTH/BASEVIDHEIGHT name) for normal and
+	// 2*ASPECT_RATIO for `special_splitscreen` (r_splitscreen==1, 2P), with
+	// a 0.8 vertical-FOV fudge on top of cv_fov for 2P. Using the same pair
+	// here keeps the tag's per-eye disparity equal to the object's per-eye
+	// disparity in the legacy GL render — without this, the tag drifts
+	// horizontally relative to the object as depth changes.
+	//
+	// Use the active view's R_FOV(viewssnum) PLUS the player's fovadd —
+	// HWR_RenderViewpoint feeds the projection R_FOV(viewssnum)+player->fovadd
+	// (hw_main.cpp:5816), and K_ObjectTracking accounts for stplyr->fovadd too
+	// (k_hud.cpp:1341). A boost-widened FOV otherwise leaves the tag's
+	// per-eye disparity mismatched against the object's during boosts.
+	const fixed_t fov_fixed = R_FOV(viewssnum)
+		+ (stplyr ? stplyr->fovadd : 0);
+	FLOAT fov_for_cot = (FLOAT)FIXED_TO_FLOAT(fov_fixed);
+	FLOAT aspect      = 1.0f;
+	if (r_splitscreen == 1)
+	{
+		fov_for_cot = (FLOAT)(atan(tan(fov_for_cot * M_PIl / 360.0) * 0.8) * 360.0 / M_PIl);
+		aspect      = 2.0f;
+	}
+	const FLOAT half_fov_rad = (FLOAT)(fov_for_cot * 0.5 * M_PIl / 180.0);
+	const FLOAT tan_half_fov = (FLOAT)tan((double)half_fov_rad);
+	if (tan_half_fov <= 0.0f)
+		return 0;
+	const FLOAT cot_half_fov = 1.0f / tan_half_fov;
+
+	// Per-eye NDC offset from mono center for a point at depth d. Derived
+	// from the off-axis frustum (eye translate + asymmetric shear) — see
+	// GLPerspectiveStereo in r_opengl.cpp. LEFT eye gets +half, RIGHT eye
+	// -half: near-point's LEFT view shifts right (crossed = near); far-
+	// point's LEFT view shifts left (uncrossed = behind). Independent of
+	// the point's X position by design.
+	const FLOAT half_ndc = (cot_half_fov / aspect) * ipd * (focal - depth_wu)
+		/ (2.0f * focal * depth_wu);
+
+	// Convert NDC offset → base pixel offset (NDC -1..+1 maps to 0..vid.width
+	// in the TwodeeRenderer ortho), then base → V_DrawFixedPatch base units
+	// via vid.dupx. Using vid.width/(2*dupx) instead of BASEVIDWIDTH/2 keeps
+	// the conversion exact when vid.width != BASEVIDWIDTH*dupx (ultrawides,
+	// 1366×768, etc.) — at those resolutions the patch coord system has
+	// "padded" base width vid.width/dupx > BASEVIDWIDTH, and BASEVIDWIDTH/2
+	// would slightly under-shift.
+	const FLOAT base_half_width = (vid.dupx > 0)
+		? (FLOAT)vid.width / (2.0f * (FLOAT)vid.dupx)
+		: (FLOAT)BASEVIDWIDTH / 2.0f;
+	FLOAT shift_base = half_ndc * base_half_width;
+
+	// Honor cv_stereoswap by inverting the eye index used to pick sign.
+	INT32 effective_pass = pass_idx;
+	if (cv_stereoswap.value)
+		effective_pass = (pass_idx == 0) ? 1 : 0;
+
+	// pass 0 = LEFT placement → +half. pass 1 = RIGHT → -half.
+	if (effective_pass != 0)
+		shift_base = -shift_base;
+
+	// Cancel the global HUD parallax that TwodeeRenderer applies to every
+	// 2D quad per-eye. Without this, a tag at depth == focal (where the
+	// per-tag shift is 0) would still appear at the HUD plane instead of
+	// the screen plane, and far/near tags would just be HUD-plane ± a tiny
+	// per-tag amount. Converting pixels → base via vid.dupx so the units
+	// match the value we're about to return.
+	if (vid.dupx > 0)
+	{
+		const FLOAT hud_shift_px = R_GetStereoHUDShiftPixelsForEyePass(pass_idx);
+		const FLOAT hud_shift_base = hud_shift_px / (FLOAT)vid.dupx;
+		shift_base -= hud_shift_base;
+	}
+
+	return (fixed_t)(shift_base * (FLOAT)FRACUNIT);
 }
 
 FLOAT R_GetStereoHUDShiftPixelsForEyePass(INT32 pass_idx)

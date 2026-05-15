@@ -35,7 +35,7 @@ menuitem_t OPTIONS_HUD[] =
 	{IT_STRING | IT_CVAR, "Show \"FOCUS LOST\"", "Displays \"FOCUS LOST\" when the game cannot accept inputs.",
 		NULL, {.cvar = &cv_showfocuslost}, 0, 0},
 
-	{IT_STRING | IT_CVAR, "Player Tags", "Floating A/B/C/D party markers and rival/CPU/name labels above other players. Auto-disabled in stereo 3D.",
+	{IT_STRING | IT_CVAR, "Player Tags", "Floating A/B/C/D party markers and rival/CPU/name labels above other players.",
 		NULL, {.cvar = &cv_showpartytags}, 0, 0},
 
 	{IT_SPACE | IT_NOTHING, NULL,  NULL,

@@ -11,6 +11,7 @@
 #include "twodee.hpp"
 
 #include "../w_wad.h"
+#include "../hardware/hw_stereo.h" // R_GetStereoEyeLock
 
 using namespace srb2;
 using namespace hwr2;
@@ -54,6 +55,10 @@ void Draw2dQuadBuilder::done()
 	list.indices.push_back(quad_.begin_element + 2);
 	list.indices.push_back(quad_.begin_element + 3);
 
+	// Inherit the current stereo eye lock so the renderer can filter this
+	// quad to LEFT-only / RIGHT-only / BOTH-eyes at flush time.
+	quad_.eye_mask = static_cast<uint8_t>(R_GetStereoEyeLock());
+
 	list.cmds.push_back(quad_);
 }
 
@@ -86,6 +91,8 @@ void Draw2dVerticesBuilder::done()
 		list.indices.push_back(tris_.begin_element + i);
 		i++;
 	}
+
+	tris_.eye_mask = static_cast<uint8_t>(R_GetStereoEyeLock());
 
 	list.cmds.push_back(tris_);
 }

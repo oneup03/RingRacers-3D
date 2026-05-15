@@ -72,6 +72,7 @@ struct MergedTwodeeCommand
 	rhi::Handle<rhi::Texture> colormap_handle;
 	uint32_t index_offset = 0;
 	uint32_t elements = 0;
+	uint8_t eye_mask = 0; // kTwodeeEye{Both,Left,Right} — see twodee.hpp
 };
 
 struct MergedTwodeeCommandList
