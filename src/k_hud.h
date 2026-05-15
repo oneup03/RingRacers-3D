@@ -160,6 +160,11 @@ typedef enum
 }
 playertagtype_t;
 
+// Master toggle for all floating in-world player tags (LOCAL party markers,
+// RIVAL, CPU, online NAME). Default Off — turn on in Options → HUD if you
+// want them. Auto-disabled when stereo 3D is active.
+extern consvar_t cv_showpartytags;
+
 playertagtype_t K_WhichPlayerTag(player_t *p);
 void K_DrawPlayerTag(fixed_t x, fixed_t y, player_t *p, playertagtype_t type, boolean foreground);
 

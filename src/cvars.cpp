@@ -452,6 +452,12 @@ consvar_t cv_display = Player("display", "0").values(CV_Unsigned).save();
 consvar_t cv_seenames = Player("seenames", "On").on_off();
 consvar_t cv_shadow = Player("shadow", "On").on_off();
 consvar_t cv_showfocuslost = Player("showfocuslost", "Yes").yes_no();
+// Master toggle for the floating player tags drawn in 3D space — the blinking
+// A/B/C/D markers over other splitscreen players, the RIVAL bot indicator, the
+// CPU labels, and the online-name nametags. Off by default: they're
+// distracting clutter in normal play. Also auto-disabled when stereo 3D is
+// active (the tags don't have per-eye projection; see K_WhichPlayerTag).
+consvar_t cv_showpartytags = Player("showpartytags", "Off").on_off();
 
 consvar_t cv_racesplits = Player("racesplits", "Leader").values({{0, "Off"}, {1, "Next"}, {2, "Leader"}}).save();
 consvar_t cv_attacksplits = Player("attacksplits", "Next").values({{0, "Off"}, {1, "Next"}, {2, "Leader"}}).save();
@@ -1500,6 +1506,18 @@ consvar_t cv_voice_allowservervoice = NetVar("voice_allowservervoice", "Off")
 	consvar_t cv_glskydome = OpenGL("gr_skydome", "On").on_off();
 	consvar_t cv_glsolvetjoin = OpenGL("gr_solvetjoin", "On").on_off().dont_save();
 	consvar_t cv_glspritebillboarding = OpenGL("gr_spritebillboarding", "On").on_off();
+
+	// Stereoscopic 3D (see hw_stereo.h). Sliders are integers; consumers scale:
+	//   ipd:         raw value is world units * 10 (slider 60 -> 6.0 wu IPD).
+	//   focallength: raw value is world units      (slider 30 -> 30 wu convergence).
+	//   huddepth:    raw value is parallax-fraction * 100 (slider -10 -> -0.10, HUD slightly forward of screen plane).
+	extern "C" CV_PossibleValue_t stereo_cons_t[];
+	extern "C" void StereoMode_OnChange(void);
+	consvar_t cv_stereomode        = OpenGL("gr_stereo",            "Off").values(stereo_cons_t).onchange(StereoMode_OnChange);
+	consvar_t cv_stereoipd         = OpenGL("gr_stereoipd",         "60").min_max(0, 200);
+	consvar_t cv_stereofocallength = OpenGL("gr_stereofocallength", "30").min_max(1, 200);
+	consvar_t cv_stereoswap        = OpenGL("gr_stereoswap",        "Off").on_off();
+	consvar_t cv_stereohuddepth    = OpenGL("gr_stereohuddepth",    "-10").min_max(-100, 50);
 #endif // HWRENDER
 
 

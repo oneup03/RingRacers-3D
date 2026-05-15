@@ -41,7 +41,15 @@ public:
 		glm::vec2 uv_offset {};
 		glm::vec2 uv_size {};
 		PostImgConfig post;
+		// Stereo: target viewport for this screen. When w == 0 (the default),
+		// draw() falls back to the splitscreen layout in get_screen_viewport().
+		// Used by VID_DisplayRHIPostimg to emit per-eye composite quads with
+		// explicit eye-region targets.
+		rhi::Rect target_viewport {};
 	};
+
+	// Splitscreen players × eyes. Sized for Phase 4 (4 players × 2 eyes).
+	static constexpr uint32_t kMaxScreens = MAXSPLITSCREENPLAYERS * 2;
 
 private:
 	struct ScreenData
@@ -56,8 +64,8 @@ private:
 	bool upload_quad_buffer_;
 
 	uint32_t screens_;
-	std::array<ScreenConfig, 4> screen_configs_;
-	srb2::StaticVec<ScreenData, 4> screen_data_;
+	std::array<ScreenConfig, kMaxScreens> screen_configs_;
+	srb2::StaticVec<ScreenData, kMaxScreens> screen_data_;
 	uint32_t target_width_;
 	uint32_t target_height_;
 
@@ -73,13 +81,13 @@ public:
 
 	void set_num_screens(uint32_t screens) noexcept
 	{
-		SRB2_ASSERT(screens > 0 && screens <= MAXSPLITSCREENPLAYERS);
+		SRB2_ASSERT(screens > 0 && screens <= kMaxScreens);
 		screens_ = screens;
 	}
 
 	void set_screen(uint32_t screen_index, const ScreenConfig& config) noexcept
 	{
-		SRB2_ASSERT(screen_index < MAXSPLITSCREENPLAYERS);
+		SRB2_ASSERT(screen_index < kMaxScreens);
 		screen_configs_[screen_index] = config;
 	}
 

@@ -162,6 +162,7 @@ public:
 	virtual TextureDetails get_texture_details(Handle<Texture> texture) override;
 	virtual Rect get_renderbuffer_size(Handle<Renderbuffer> renderbuffer) override;
 	virtual uint32_t get_buffer_size(Handle<Buffer> buffer) override;
+	virtual uintptr_t get_native_texture(Handle<Texture> texture) noexcept override;
 
 	virtual void update_buffer(
 		Handle<Buffer> buffer,

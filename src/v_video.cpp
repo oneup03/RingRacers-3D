@@ -38,6 +38,7 @@
 #include "m_random.h"
 #include "doomstat.h"
 #include "hwr2/blendmode.hpp"
+#include "hardware/hw_stereo.h"
 
 #ifdef HWRENDER
 #include "hardware/hw_glob.h"
@@ -3701,6 +3702,70 @@ void VID_DisplayRHIPostimg(void)
 {
 	rhi::Rhi* rhi = srb2::sys::get_rhi(srb2::sys::g_current_rhi);
 	hwr2::HardwareState* hw_state = srb2::sys::main_hardware_state();
+
+	// Stereo composite path: emit one ScreenConfig per (player × eye), each
+	// sampling the eye's sub-rect of legacygl_backbuffer and drawing into the
+	// matching region of the main backbuffer. The target rect is just the
+	// render rect with top-down Y converted to bottom-up — both buffers are
+	// vid.w × vid.h so the same rect serves both source UV and target viewport.
+#ifdef HWRENDER
+	if (R_StereoActive() && rendermode == render_opengl)
+	{
+		const INT32 stereo_mode = R_StereoMode();
+		const uint32_t W = static_cast<uint32_t>(vid.width);
+		const uint32_t H = static_cast<uint32_t>(vid.height);
+		const int num_players = std::clamp(r_splitscreen + 1, 1, MAXSPLITSCREENPLAYERS);
+		const uint32_t num_screens = static_cast<uint32_t>(num_players * 2);
+
+		hw_state->blit_postimg_screens->set_num_screens(num_screens);
+		hw_state->blit_postimg_screens->set_target(W, H);
+
+		uint32_t idx = 0;
+		for (int eye = 0; eye < 2; eye++)
+		{
+			for (int p = 0; p < num_players; p++)
+			{
+				// Render rect (top-down Y) inside legacygl_backbuffer for
+				// this (eye, player). The matching target rect in the main
+				// backbuffer is the same after the Y inversion below.
+				stereorect_t rr = R_StereoComputePlayerEyeRect(stereo_mode, eye, p);
+
+				// Source UV: top-down rect → bottom-up UV.
+				glm::vec2 uv_offset {static_cast<float>(rr.x) / static_cast<float>(W),
+				                    static_cast<float>(H - rr.y - rr.h) / static_cast<float>(H)};
+				glm::vec2 uv_size   {static_cast<float>(rr.w) / static_cast<float>(W),
+				                    static_cast<float>(rr.h) / static_cast<float>(H)};
+
+				// Target viewport (GL bottom-up Y) = same rect after Y flip.
+				rhi::Rect target {};
+				target.x = static_cast<int32_t>(rr.x);
+				target.y = static_cast<int32_t>(H - rr.y - rr.h);
+				target.w = static_cast<uint32_t>(rr.w);
+				target.h = static_cast<uint32_t>(rr.h);
+
+				hw_state->blit_postimg_screens->set_screen(
+					idx++,
+					{
+						hw_state->legacygl_backbuffer->color(),
+						false,
+						uv_offset,
+						uv_size,
+						{
+							postimgtype[p] == postimg_water && !cv_reducevfx.value,
+							postimgtype[p] == postimg_heat && !cv_reducevfx.value,
+							true,   // GL needs vflip
+							false,
+						},
+						target,
+					}
+				);
+			}
+		}
+
+		hw_state->blit_postimg_screens->draw(*rhi);
+		return;
+	}
+#endif
 
 	const int screens = std::clamp(r_splitscreen + 1, 1, MAXSPLITSCREENPLAYERS);
 	hw_state->blit_postimg_screens->set_num_screens(screens);

@@ -12,6 +12,7 @@
 #include "../k_menu.h"
 #include "../r_main.h"	// cv_showhud
 #include "../v_video.h" // cv_constextsize
+#include "../k_hud.h"   // cv_showpartytags
 
 menuitem_t OPTIONS_HUD[] =
 {
@@ -33,6 +34,9 @@ menuitem_t OPTIONS_HUD[] =
 
 	{IT_STRING | IT_CVAR, "Show \"FOCUS LOST\"", "Displays \"FOCUS LOST\" when the game cannot accept inputs.",
 		NULL, {.cvar = &cv_showfocuslost}, 0, 0},
+
+	{IT_STRING | IT_CVAR, "Player Tags", "Floating A/B/C/D party markers and rival/CPU/name labels above other players. Auto-disabled in stereo 3D.",
+		NULL, {.cvar = &cv_showpartytags}, 0, 0},
 
 	{IT_SPACE | IT_NOTHING, NULL,  NULL,
 		NULL, {NULL}, 0, 0},

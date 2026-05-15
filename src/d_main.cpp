@@ -96,6 +96,8 @@
 
 #ifdef HWRENDER
 #include "hardware/hw_main.h" // 3D View Rendering
+#include "hardware/hw_drv.h"  // HWD function-pointer table
+#include "hardware/hw_stereo.h" // stereo eye loop helpers
 #endif
 
 #include "lua_script.h"
@@ -582,7 +584,33 @@ static bool D_Display(bool world)
 				if (rendermode == render_opengl)
 				{
 					VID_BeginLegacyGLRenderPass();
+
+					// Frame-start full-screen color clear. legacygl_backbuffer
+					// uses kLoad (preserve), and the per-viewnumber clear in
+					// HWR_RenderPlayerView is gated under !R_StereoActive() so
+					// the two eye passes don't wipe each other (skill step 8).
+					if (R_StereoActive())
+					{
+						FRGBAFloat sclear;
+						sclear.red = sclear.green = sclear.blue = 0.0f;
+						sclear.alpha = 1.0f;
+						HWD.pfnResetStereoMode();
+						HWD.pfnClearBuffer(true, false, &sclear);
+					}
 				}
+#endif
+
+				{
+#ifdef HWRENDER
+				const INT32 stereo_eyes = (rendermode == render_opengl) ? R_StereoNumEyes() : 1;
+#else
+				const INT32 stereo_eyes = 1;
+#endif
+				for (INT32 eye_pass = 0; eye_pass < stereo_eyes; eye_pass++)
+				{
+#ifdef HWRENDER
+					if (rendermode == render_opengl && R_StereoActive())
+						R_BeginStereoEye(eye_pass);
 #endif
 
 				for (i = 0; i <= r_splitscreen; i++)
@@ -593,7 +621,20 @@ static bool D_Display(bool world)
 
 #ifdef HWRENDER
 						if (rendermode == render_opengl)
+						{
+							if (R_StereoActive())
+							{
+								// Set the per-(eye, player) viewport+scissor
+								// BEFORE HWR_RenderPlayerView so HWR_ClearView's
+								// depth clear lands in the right region
+								// (skill pitfall 2).
+								const INT32 sm = R_StereoMode();
+								stereorect_t rect = R_StereoComputePlayerEyeRect(sm, eye_pass, i);
+								HWD.pfnSetStereoMode(sm, R_GetCurrentPlacementEye(),
+								                     rect.x, rect.y, rect.w, rect.h);
+							}
 							HWR_RenderPlayerView();
+						}
 						else
 #endif
 						if (rendermode == render_soft)
@@ -640,6 +681,13 @@ static bool D_Display(bool world)
 					}
 				}
 
+#ifdef HWRENDER
+					if (rendermode == render_opengl && R_StereoActive())
+						R_EndStereoEye();
+#endif
+				} // end eye_pass loop
+				} // end eye_pass scope
+
 				if (rendermode == render_soft)
 				{
 					for (i = 0; i <= r_splitscreen; i++)
@@ -651,6 +699,7 @@ static bool D_Display(bool world)
 #ifdef HWRENDER
 				if (rendermode == render_opengl)
 				{
+					HWD.pfnResetStereoMode();
 					VID_EndLegacyGLRenderPass();
 				}
 #endif

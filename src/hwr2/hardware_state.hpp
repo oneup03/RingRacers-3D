@@ -18,6 +18,7 @@
 #include "resource_management.hpp"
 #include "screen_capture.hpp"
 #include "software_screen_renderer.hpp"
+#include "stereo_composite.hpp"
 #include "twodee_renderer.hpp"
 #include "upscale_backbuffer.hpp"
 
@@ -43,6 +44,7 @@ struct HardwareState
 	std::unique_ptr<BlitRectPass> sharp_bilinear_blit_rect;
 	std::unique_ptr<BlitRectPass> crt_blit_rect;
 	std::unique_ptr<BlitRectPass> crtsharp_blit_rect;
+	std::unique_ptr<StereoCompositePass> stereo_composite;
 	std::unique_ptr<ScreenshotPass> screen_capture;
 	std::unique_ptr<UpscaleBackbuffer> backbuffer;
 	std::unique_ptr<UpscaleBackbuffer> legacygl_backbuffer;

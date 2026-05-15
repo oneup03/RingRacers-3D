@@ -110,9 +110,17 @@ void BlitPostimgScreens::draw(Rhi& rhi)
 		RasterizerStateDesc r_state {};
 		r_state.cull = CullMode::kNone;
 
+		// Use the caller-provided target viewport if set (stereo per-eye
+		// regions); otherwise fall back to the legacy splitscreen layout.
+		Rect target_rect;
+		if (screen_config.target_viewport.w != 0 || screen_config.target_viewport.h != 0)
+			target_rect = screen_config.target_viewport;
+		else
+			target_rect = get_screen_viewport(i, screens_, target_width_, target_height_);
+
 		rhi.bind_program(data.program);
 		rhi.set_rasterizer_state(r_state);
-		rhi.set_viewport(get_screen_viewport(i, screens_, target_width_, target_height_));
+		rhi.set_viewport(target_rect);
 		rhi.bind_vertex_attrib("a_position", quad_vbo_, rhi::VertexAttributeFormat::kFloat3, offsetof(BlitVertex, x), sizeof(BlitVertex));
 		rhi.bind_vertex_attrib("a_texcoord0", quad_vbo_, rhi::VertexAttributeFormat::kFloat2, offsetof(BlitVertex, u), sizeof(BlitVertex));
 		rhi.bind_index_buffer(quad_ibo_);

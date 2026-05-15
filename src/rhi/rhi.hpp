@@ -586,6 +586,16 @@ struct Rhi
 	virtual Rect get_renderbuffer_size(Handle<Renderbuffer> renderbuffer) = 0;
 	virtual uint32_t get_buffer_size(Handle<Buffer> buffer) = 0;
 
+	/// Native backend handle for a texture. GL2 returns the GLuint name; other
+	/// backends return 0 (no native handle exposed). Used by integrations that
+	/// must hand a raw GL texture to an external library — currently only the
+	/// LeiaSR weaver (`stereo_leiasr.cpp`). Returns 0 if the handle is invalid.
+	virtual uintptr_t get_native_texture(Handle<Texture> texture) noexcept
+	{
+		(void)texture;
+		return 0;
+	}
+
 	virtual void update_buffer(
 		Handle<Buffer> buffer,
 		uint32_t offset,

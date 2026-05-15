@@ -472,6 +472,9 @@ extern menu_t OPTIONS_VideoColorProfileDef;
 extern menuitem_t OPTIONS_VideoAdvanced[];
 extern menu_t OPTIONS_VideoAdvancedDef;
 
+extern menuitem_t OPTIONS_VideoStereo[];
+extern menu_t OPTIONS_VideoStereoDef;
+
 extern menuitem_t OPTIONS_Sound[];
 extern menu_t OPTIONS_SoundDef;
 

@@ -124,6 +124,15 @@ typedef struct
 	FLOAT       centerx, centery;
 	FLOAT       rollx, rollz;
 	boolean     mirror;          // SRB2Kart: Encore Mode
+
+	// Stereoscopic 3D. eyeOffset == 0 means mono; -1/+1 switch SetTransform to
+	// GLPerspectiveStereo. iod is signed (left eye = +ipd, right eye = -ipd)
+	// so a single multiply in the off-axis frustum derivation picks the sign.
+	// skyboxPass collapses the eye translate so the sky renders at "infinity".
+	INT8        eyeOffset;
+	FLOAT       iod;
+	FLOAT       focalLength;
+	boolean     skyboxPass;
 } FTransform;
 
 // Transformed vector, as passed to HWR API

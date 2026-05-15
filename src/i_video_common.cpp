@@ -24,8 +24,10 @@
 #include "m_misc.h"
 #include "hwr2/hardware_state.hpp"
 #include "hwr2/patch_atlas.hpp"
+#include "hwr2/stereo_leiasr.hpp"
 #include "hwr2/twodee.hpp"
 #include "v_video.h"
+#include "hardware/hw_stereo.h"
 
 // KILL THIS WHEN WE KILL OLD OGL SUPPORT PLEASE
 #include "d_netcmd.h" // kill
@@ -85,6 +87,7 @@ static void reset_hardware_state(Rhi* rhi)
 	g_hw_state.sharp_bilinear_blit_rect = std::make_unique<BlitRectPass>(BlitRectPass::BlitMode::kSharpBilinear);
 	g_hw_state.crt_blit_rect = std::make_unique<BlitRectPass>(BlitRectPass::BlitMode::kCrt);
 	g_hw_state.crtsharp_blit_rect = std::make_unique<BlitRectPass>(BlitRectPass::BlitMode::kCrtSharp);
+	g_hw_state.stereo_composite = std::make_unique<StereoCompositePass>();
 	g_hw_state.screen_capture = std::make_unique<ScreenshotPass>();
 	g_hw_state.backbuffer = std::make_unique<UpscaleBackbuffer>();
 	g_hw_state.legacygl_backbuffer = std::make_unique<UpscaleBackbuffer>();
@@ -289,24 +292,118 @@ void I_FinishUpdate(void)
 	g_hw_state.crt_blit_rect->set_texture(g_hw_state.backbuffer->color(), static_cast<uint32_t>(vid.width), static_cast<uint32_t>(vid.height));
 	g_hw_state.crtsharp_blit_rect->set_texture(g_hw_state.backbuffer->color(), static_cast<uint32_t>(vid.width), static_cast<uint32_t>(vid.height));
 
-	switch (cv_scr_effect.value)
+	// Stereoscopic 3D composite dispatch.
+	//
+	//   LeiaSR (autostereoscopic): hand the SbS main backbuffer to the SR
+	//   weaver, which writes a glasses-free 3D image to the default
+	//   framebuffer. Works in splitscreen too — the SbS+splitscreen quadrant
+	//   layout is just one wide SbS image to the weaver, which still
+	//   resolves left/right of center as L/R eye for both players.
+	//
+	//   Anaglyph / Row-Interlaced / Column-Interlaced / Checkerboard:
+	//   StereoCompositePass runs the per-mode fragment shader on the SbS/TaB
+	//   main backbuffer (HUD interleaved by the per-eye twodee flush).
+	//
+	//   SbS / TaB / Off: existing BlitRectPass family — the SbS/TaB content
+	//   IS the window signal, just scale it.
+	//
+	// Reads the *raw* cv_stereomode.value (NOT R_StereoMode()) — composite
+	// dispatch wants the user's actual choice, not the internal-format
+	// substitution.
+	bool stereo_leiasr_dispatch = false;
+	bool stereo_composite_dispatch = false;
+#ifdef HWRENDER
+	if (rendermode == render_opengl)
 	{
-	case 1:
-		rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kLinear, TextureFilterMode::kLinear);
-		g_hw_state.sharp_bilinear_blit_rect->draw(*rhi);
-		break;
-	case 2:
-		rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kLinear, TextureFilterMode::kLinear);
-		g_hw_state.crt_blit_rect->draw(*rhi);
-		break;
-	case 3:
-		rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kLinear, TextureFilterMode::kLinear);
-		g_hw_state.crtsharp_blit_rect->draw(*rhi);
-		break;
-	default:
-		rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kNearest, TextureFilterMode::kNearest);
-		g_hw_state.blit_rect->draw(*rhi);
-		break;
+		const INT32 sm = cv_stereomode.value;
+		stereo_composite_dispatch =
+			(sm == STEREO_ROW_INTERLACED)    ||
+			(sm == STEREO_COLUMN_INTERLACED) ||
+			(sm == STEREO_CHECKERBOARD)      ||
+			(sm == STEREO_ANAGLYPH);
+		stereo_leiasr_dispatch =
+			(sm == STEREO_LEIASR) &&
+			R_LeiaSR_Init(I_GetWindowHandle()) && R_LeiaSR_Available();
+	}
+#endif
+
+	if (stereo_leiasr_dispatch)
+	{
+#ifdef HWRENDER
+		// Hand the SbS main backbuffer to the SR weaver. The default
+		// framebuffer is currently bound by push_default_render_pass; the
+		// weaver writes into it before rhi->present() does the SwapWindow.
+		// 0x1907 = GL_RGB — UpscaleBackbuffer's color attachment format.
+		const uintptr_t tex_id = rhi->get_native_texture(g_hw_state.backbuffer->color());
+		if (tex_id != 0)
+		{
+			R_LeiaSR_Weave(static_cast<uint32_t>(tex_id),
+			               vid.width, vid.height, 0x1907 /* GL_RGB */);
+		}
+		else
+		{
+			// Native texture id unavailable — gracefully fall through to SbS.
+			rhi->update_texture_settings(g_hw_state.backbuffer->color(),
+				TextureWrapMode::kClamp, TextureWrapMode::kClamp,
+				TextureFilterMode::kNearest, TextureFilterMode::kNearest);
+			g_hw_state.blit_rect->draw(*rhi);
+		}
+#endif
+	}
+	else if (stereo_composite_dispatch)
+	{
+#ifdef HWRENDER
+		// Match the user's cv_scr_scale / cv_scr_x / cv_scr_y placement so
+		// the composite output respects the same window-fit rules. Forces
+		// linear sampling — the source backbuffer holds eye-half regions
+		// that get scaled to the window, and nearest would alias hard.
+		rhi::Rect out_rect;
+		if (cv_scr_scale.value != FRACUNIT)
+		{
+			float f = std::max(FixedToFloat(cv_scr_scale.value), 0.f);
+			float w = vid.realwidth * f;
+			float h = vid.realheight * f;
+			float x = (vid.realwidth - w) * (0.5f + (FixedToFloat(cv_scr_x.value) * 0.5f));
+			float y = (vid.realheight - h) * (0.5f + (FixedToFloat(cv_scr_y.value) * 0.5f));
+			out_rect = {static_cast<int32_t>(x), static_cast<int32_t>(y),
+			            static_cast<uint32_t>(w), static_cast<uint32_t>(h)};
+		}
+		else
+		{
+			out_rect = {0, 0, static_cast<uint32_t>(vid.realwidth), static_cast<uint32_t>(vid.realheight)};
+		}
+
+		rhi->update_texture_settings(g_hw_state.backbuffer->color(),
+			TextureWrapMode::kClamp, TextureWrapMode::kClamp,
+			TextureFilterMode::kLinear, TextureFilterMode::kLinear);
+		g_hw_state.stereo_composite->set_texture(g_hw_state.backbuffer->color(),
+			static_cast<uint32_t>(vid.width), static_cast<uint32_t>(vid.height));
+		g_hw_state.stereo_composite->set_output(out_rect.x, out_rect.y, out_rect.w, out_rect.h);
+		g_hw_state.stereo_composite->set_stereo_mode(cv_stereomode.value);
+		g_hw_state.stereo_composite->draw(*rhi);
+#endif
+	}
+	else
+	{
+		switch (cv_scr_effect.value)
+		{
+		case 1:
+			rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kLinear, TextureFilterMode::kLinear);
+			g_hw_state.sharp_bilinear_blit_rect->draw(*rhi);
+			break;
+		case 2:
+			rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kLinear, TextureFilterMode::kLinear);
+			g_hw_state.crt_blit_rect->draw(*rhi);
+			break;
+		case 3:
+			rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kLinear, TextureFilterMode::kLinear);
+			g_hw_state.crtsharp_blit_rect->draw(*rhi);
+			break;
+		default:
+			rhi->update_texture_settings(g_hw_state.backbuffer->color(), TextureWrapMode::kClamp, TextureWrapMode::kClamp, TextureFilterMode::kNearest, TextureFilterMode::kNearest);
+			g_hw_state.blit_rect->draw(*rhi);
+			break;
+		}
 	}
 
 	g_hw_state.imgui_renderer->render(*rhi);

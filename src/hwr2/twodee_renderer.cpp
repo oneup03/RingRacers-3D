@@ -20,6 +20,7 @@
 #include "../r_patch.h"
 #include "../v_video.h"
 #include "../z_zone.h"
+#include "../hardware/hw_stereo.h"
 
 using namespace srb2;
 using namespace srb2::hwr2;
@@ -499,43 +500,88 @@ void TwodeeRenderer::flush(Rhi& rhi, Twodee& twodee)
 		ctx_list_itr++;
 	}
 
+	// Stereo: replay the merged command lists once per eye into the matching
+	// eye region of the backbuffer. Build was done once above; only the draw
+	// portion below loops. Per skill D3 — the merged lists are safe to replay
+	// because nothing in the draw section mutates them.
+	//
+	// HUD parallax is applied by NDC-shifting the orthographic projection
+	// horizontally so the same V_Draw* base coordinates land slightly to the
+	// left/right of their nominal position per eye.
+	const int32_t stereo_mode = R_StereoMode();
+	const int32_t stereo_eyes = R_StereoNumEyes();
+	const int32_t vw = vid.width;
+	const int32_t vh = vid.height;
+
 	// Presumably, we're already in a renderpass when flush is called
 	rhi.bind_program(program_);
-	rhi.set_uniform("u_projection", glm::mat4(
-		glm::vec4(2.f / vid.width, 0.f, 0.f, 0.f),
-		glm::vec4(0.f, -2.f / vid.height, 0.f, 0.f),
-		glm::vec4(0.f, 0.f, 1.f, 0.f),
-		glm::vec4(-1.f, 1.f, 0.f, 1.f)
-	));
 	rhi.set_uniform("u_modelview", glm::identity<glm::mat4>());
 	rhi.set_uniform("u_texcoord0_transform", glm::identity<glm::mat3>());
 	rhi.set_uniform("u_sampler0_is_indexed_alpha", static_cast<int32_t>(1));
 	rhi.set_sampler("s_sampler1", 1, palette_tex);
-	for (auto& list : cmd_lists_)
+
+	for (int32_t eye_pass = 0; eye_pass < stereo_eyes; eye_pass++)
 	{
-		rhi.bind_vertex_attrib("a_position", list.vbo, VertexAttributeFormat::kFloat3, offsetof(TwodeeVertex, x), sizeof(TwodeeVertex));
-		rhi.bind_vertex_attrib("a_texcoord0", list.vbo, VertexAttributeFormat::kFloat2, offsetof(TwodeeVertex, u), sizeof(TwodeeVertex));
-		rhi.bind_vertex_attrib("a_color", list.vbo, VertexAttributeFormat::kFloat4, offsetof(TwodeeVertex, r), sizeof(TwodeeVertex));
-		for (auto& cmd : list.cmds)
+		// Per-eye projection (full-size ortho, optionally NDC-shifted for HUD
+		// parallax) and viewport (full screen, or eye half).
+		const float ndc_x_offset = (stereo_eyes > 1)
+			? 2.0f * R_GetStereoHUDShiftPixelsForEyePass(eye_pass) / static_cast<float>(vw)
+			: 0.0f;
+		rhi.set_uniform("u_projection", glm::mat4(
+			glm::vec4(2.f / vw, 0.f, 0.f, 0.f),
+			glm::vec4(0.f, -2.f / vh, 0.f, 0.f),
+			glm::vec4(0.f, 0.f, 1.f, 0.f),
+			glm::vec4(-1.f + ndc_x_offset, 1.f, 0.f, 1.f)
+		));
+
+		// Per-eye viewport. Mirrors VID_DisplayRHIPostimg's stereo target
+		// layout — SbS: left/right halves; TaB: bottom/top halves in GL
+		// bottom-up Y, with eye 0 (LEFT, on top visually) at high Y.
+		rhi::Rect viewport {0, 0, static_cast<uint32_t>(vw), static_cast<uint32_t>(vh)};
+		if (stereo_eyes > 1)
 		{
-			if (cmd.elements == 0)
+			if (stereo_mode == STEREO_TAB)
 			{
-				// Don't do anything for 0-element commands
-				// This shouldn't happen, but, just in case...
-				continue;
+				viewport.w = static_cast<uint32_t>(vw);
+				viewport.h = static_cast<uint32_t>(vh / 2);
+				viewport.x = 0;
+				viewport.y = (eye_pass == 0) ? (vh / 2) : 0; // eye 0 on top
 			}
-			RasterizerStateDesc desc;
-			desc.cull = CullMode::kNone;
-			desc.primitive = cmd.primitive;
-			desc.blend_enabled = true;
-			set_blend_state(desc, cmd.blend_mode);
-			// Set blend and primitives
-			rhi.set_rasterizer_state(desc);
-			rhi.set_viewport({0, 0, static_cast<uint32_t>(vid.width), static_cast<uint32_t>(vid.height)});
-			rhi.set_sampler("s_sampler0", 0, cmd.texture_handle);
-			rhi.set_sampler("s_sampler2", 2, cmd.colormap_handle);
-			rhi.bind_index_buffer(list.ibo);
-			rhi.draw_indexed(cmd.elements, cmd.index_offset);
+			else // SBS / LEIASR / shader-composite modes
+			{
+				viewport.w = static_cast<uint32_t>(vw / 2);
+				viewport.h = static_cast<uint32_t>(vh);
+				viewport.x = (eye_pass == 0) ? 0 : (vw / 2);
+				viewport.y = 0;
+			}
+		}
+
+		for (auto& list : cmd_lists_)
+		{
+			rhi.bind_vertex_attrib("a_position", list.vbo, VertexAttributeFormat::kFloat3, offsetof(TwodeeVertex, x), sizeof(TwodeeVertex));
+			rhi.bind_vertex_attrib("a_texcoord0", list.vbo, VertexAttributeFormat::kFloat2, offsetof(TwodeeVertex, u), sizeof(TwodeeVertex));
+			rhi.bind_vertex_attrib("a_color", list.vbo, VertexAttributeFormat::kFloat4, offsetof(TwodeeVertex, r), sizeof(TwodeeVertex));
+			for (auto& cmd : list.cmds)
+			{
+				if (cmd.elements == 0)
+				{
+					// Don't do anything for 0-element commands
+					// This shouldn't happen, but, just in case...
+					continue;
+				}
+				RasterizerStateDesc desc;
+				desc.cull = CullMode::kNone;
+				desc.primitive = cmd.primitive;
+				desc.blend_enabled = true;
+				set_blend_state(desc, cmd.blend_mode);
+				// Set blend and primitives
+				rhi.set_rasterizer_state(desc);
+				rhi.set_viewport(viewport);
+				rhi.set_sampler("s_sampler0", 0, cmd.texture_handle);
+				rhi.set_sampler("s_sampler2", 2, cmd.colormap_handle);
+				rhi.bind_index_buffer(list.ibo);
+				rhi.draw_indexed(cmd.elements, cmd.index_offset);
+			}
 		}
 	}
 

@@ -20,6 +20,7 @@
 #include "../core/vector.hpp"
 #include "../cxxutil.hpp"
 #include "../doomstat.h" // mainwads
+#include "../hwr2/stereo_shader_sources.hpp"
 #include "../w_wad.h"
 #include "../z_zone.h"
 
@@ -105,6 +106,19 @@ static srb2::Vector<srb2::String> get_sources_from_glsllist_lump(const char* lum
 std::tuple<srb2::Vector<srb2::String>, srb2::Vector<srb2::String>>
 SdlGl2Platform::find_shader_sources(const char* name)
 {
+	// Built-in registry first: the stereoscopic composite shaders are
+	// embedded as C++ string literals in stereo_shader_sources.cpp rather
+	// than shipped as pk3 lumps. Falls through to the glsllist/WAD path
+	// for everything else.
+	{
+		srb2::Vector<srb2::String> vertex_sources;
+		srb2::Vector<srb2::String> fragment_sources;
+		if (srb2::hwr2::find_builtin_stereo_shader_sources(name, vertex_sources, fragment_sources))
+		{
+			return std::make_tuple(std::move(vertex_sources), std::move(fragment_sources));
+		}
+	}
+
 	std::array<srb2::String, 2> glsllist_names = glsllist_lump_names(name);
 
 	srb2::Vector<srb2::String> vertex_sources = get_sources_from_glsllist_lump(glsllist_names[0].c_str());

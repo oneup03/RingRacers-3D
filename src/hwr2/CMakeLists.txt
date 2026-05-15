@@ -19,6 +19,12 @@ target_sources(SRB2SDL2 PRIVATE
 	screen_capture.hpp
 	software_screen_renderer.cpp
 	software_screen_renderer.hpp
+	stereo_composite.cpp
+	stereo_composite.hpp
+	stereo_leiasr.cpp
+	stereo_leiasr.hpp
+	stereo_shader_sources.cpp
+	stereo_shader_sources.hpp
 	twodee.cpp
 	twodee.hpp
 	twodee_renderer.cpp

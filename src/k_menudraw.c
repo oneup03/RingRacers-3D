@@ -166,6 +166,13 @@ static void M_DrawSlider(INT32 x, INT32 y, const consvar_t *cv, boolean ontop)
 	// draw the slider cursor
 	V_DrawFill(px - 1, y - 1, 5, 11, 31);
 	V_DrawFill(px, y, 2, 8, aquamap[0]);
+
+	// Numeric readout right-aligned just left of the slider bar (clearing
+	// the left-arrow's animated reach when the row is active). Useful for
+	// settings whose value carries meaning beyond visual position — e.g.
+	// the Stereoscopic 3D sliders, where slider position maps to world
+	// units and parallax fractions.
+	V_DrawRightAlignedMenuString(x - (ontop ? 22 : 6), y, highlightflags, cv->string);
 }
 
 void M_DrawCursorHand(INT32 x, INT32 y)

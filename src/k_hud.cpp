@@ -42,6 +42,9 @@
 #include "z_zone.h"
 #include "m_cond.h"
 #include "r_main.h"
+#ifdef HWRENDER
+#include "hardware/hw_stereo.h"
+#endif
 #include "s_sound.h"
 #include "r_things.h"
 #include "r_fps.h"
@@ -5566,6 +5569,27 @@ static void K_DrawNameTagForPlayer(fixed_t x, fixed_t y, player_t *p, UINT32 fla
 
 playertagtype_t K_WhichPlayerTag(player_t *p)
 {
+	// Master gates apply to every tag type (LOCAL / RIVAL / CPU / NAME):
+	//
+	// cv_showpartytags — user toggle, off by default. The tags are
+	// permanently distracting clutter in normal play; turning them on is
+	// opt-in via Options → HUD.
+	//
+	// Stereo: tags are also suppressed here regardless of the cvar.
+	// K_ObjectTracking projects with a single mono frustum, and the
+	// resulting 2D coords are replayed into both eyes with a constant
+	// HUD-depth shift — so each tag sits at the wrong depth (uniform HUD
+	// plane instead of the tagged player's actual world depth) and the
+	// per-player-base-coord clip looks like the tag is cut off at the
+	// eye-viewport edge. Fixing properly would need per-eye projection +
+	// per-eye-specific 2D draws (twodee can't emit per-eye geometry today).
+	if (!cv_showpartytags.value)
+		return PLAYERTAG_NONE;
+#ifdef HWRENDER
+	if (R_StereoActive())
+		return PLAYERTAG_NONE;
+#endif
+
 	const UINT8 cnum = R_GetViewNumber();
 
 	if (!(demo.playback == true && camera[cnum].freecam == true) && P_IsDisplayPlayer(p) &&

@@ -9,6 +9,7 @@ target_sources(SRB2SDL2 PRIVATE
 	hw_md2load.cpp
 	hw_md3load.cpp
 	hw_model.cpp
+	hw_stereo.cpp
 	u_list.cpp
 	hw_batching.cpp
 	r_opengl/r_opengl.cpp

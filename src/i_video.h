@@ -63,6 +63,14 @@ void I_StartupGraphics(void);
 */
 void I_ShutdownGraphics(void);
 
+/**	\brief Returns a platform native window handle (Win32: HWND).
+	\return Native window handle as `void*`, or NULL if unavailable.
+
+	Used by stereo backends that need a native HWND — currently only the
+	LeiaSR weaver (see src/hwr2/stereo_leiasr.cpp).
+*/
+void *I_GetWindowHandle(void);
+
 /**	\brief	The I_SetPalette function
 
 	\param	palette	Takes full 8 bit values

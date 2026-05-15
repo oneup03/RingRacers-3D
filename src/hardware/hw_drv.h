@@ -79,6 +79,14 @@ EXPORT void HWRAPI(UnSetShader) (void);
 EXPORT void HWRAPI(SetShaderInfo) (hwdshaderinfo_t info, INT32 value);
 EXPORT void HWRAPI(LoadCustomShader) (int number, char *code, size_t size, boolean isfragment);
 
+// Stereoscopic 3D viewport+scissor control. SetStereoMode caches the rect so
+// ReapplyStereoMode can restore it after GClipRect clobbers the viewport. No
+// per-eye color mask, no stencil — eye separation for composite modes is a
+// present-time fragment shader.
+EXPORT void HWRAPI(SetStereoMode) (INT32 mode, INT32 eye, INT32 x, INT32 y, INT32 w, INT32 h);
+EXPORT void HWRAPI(ReapplyStereoMode) (void);
+EXPORT void HWRAPI(ResetStereoMode) (void);
+
 // ==========================================================================
 //                                      HWR DRIVER OBJECT, FOR CLIENT PROGRAM
 // ==========================================================================
@@ -128,6 +136,10 @@ struct hwdriver_s
 	SetShaderInfo       pfnSetShaderInfo;
 	LoadCustomShader    pfnLoadCustomShader;
 	ResetRenderState    pfnResetRenderState;
+
+	SetStereoMode       pfnSetStereoMode;
+	ReapplyStereoMode   pfnReapplyStereoMode;
+	ResetStereoMode     pfnResetStereoMode;
 };
 
 extern struct hwdriver_s hwdriver;

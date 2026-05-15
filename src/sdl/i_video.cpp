@@ -1657,6 +1657,10 @@ void VID_StartupOpenGL(void)
 		*(void**)&HWD.pfnSetShaderInfo    = hwSym("SetShaderInfo",NULL);
 		*(void**)&HWD.pfnLoadCustomShader = hwSym("LoadCustomShader",NULL);
 		*(void**)&HWD.pfnResetRenderState = hwSym("ResetRenderState",NULL);
+
+		*(void**)&HWD.pfnSetStereoMode     = hwSym("SetStereoMode",NULL);
+		*(void**)&HWD.pfnReapplyStereoMode = hwSym("ReapplyStereoMode",NULL);
+		*(void**)&HWD.pfnResetStereoMode   = hwSym("ResetStereoMode",NULL);
 		glstartup = true;
 	}
 
@@ -1668,6 +1672,21 @@ void VID_StartupOpenGL(void)
 		rendermode = render_soft;
 		setrenderneeded = 0;
 	}
+#endif
+}
+
+void *I_GetWindowHandle(void)
+{
+#if defined(_WIN32)
+	if (!window)
+		return NULL;
+	SDL_SysWMinfo info;
+	SDL_VERSION(&info.version);
+	if (!SDL_GetWindowWMInfo(window, &info))
+		return NULL;
+	return reinterpret_cast<void*>(info.info.win.window);
+#else
+	return NULL;
 #endif
 }
 

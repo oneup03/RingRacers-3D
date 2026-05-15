@@ -373,6 +373,36 @@ if(SRB2_CONFIG_ENABLE_DISCORDRPC)
 	target_sources(SRB2SDL2 PRIVATE discord.c)
 endif()
 
+# LeiaSR autostereoscopic 3D. Pulls find_package configs out of the vendored
+# submodule at thirdparty/LeiaSR64. SR DLLs are delay-loaded so the exe
+# launches on machines without the SR runtime — stereo_leiasr.cpp's
+# LoadLibraryW preflight check then keeps us off the delay-load codepath.
+if(SRB2_CONFIG_ENABLE_LEIASR AND WIN32)
+	list(APPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/thirdparty/LeiaSR64/lib/cmake")
+	find_package(simulatedreality REQUIRED)
+	find_package(srOpenGL REQUIRED)
+	target_link_libraries(SRB2SDL2 PRIVATE simulatedreality srOpenGL::srOpenGL)
+	target_compile_definitions(SRB2SDL2 PRIVATE -DHAVE_LEIASR)
+	if(MSVC)
+		# /DELAYLOAD makes a DLL load lazy on first imported-function call;
+		# combined with the preflight LoadLibraryW in stereo_leiasr.cpp this
+		# is what lets the exe start on machines that don't have the SR
+		# runtime installed.
+		target_link_libraries(SRB2SDL2 PRIVATE delayimp)
+		target_link_options(SRB2SDL2 PRIVATE
+			/DELAYLOAD:simulatedreality.dll
+			/DELAYLOAD:SimulatedRealityCore.dll
+			/DELAYLOAD:SimulatedRealityCameras.dll
+			/DELAYLOAD:SimulatedRealityHandTrackers.dll
+			/DELAYLOAD:SimulatedRealityFaceTrackers.dll
+			/DELAYLOAD:SimulatedRealityUserModelers.dll
+			/DELAYLOAD:SimulatedRealityDisplays.dll
+			/DELAYLOAD:SimulatedRealityOpenGL.dll
+			/DELAYLOAD:DimencoWeaving.dll
+		)
+	endif()
+endif()
+
 target_link_libraries(SRB2SDL2 PRIVATE tcbrindle::span)
 target_link_libraries(SRB2SDL2 PRIVATE glm::glm)
 target_link_libraries(SRB2SDL2 PRIVATE Stb)

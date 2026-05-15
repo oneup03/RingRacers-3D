@@ -40,6 +40,9 @@ menuitem_t OPTIONS_Video[] =
 	{IT_STRING | IT_SUBMENU, "Color Profile...", "Adjust the color profile of the game's display.",
 		NULL, {.submenu = &OPTIONS_VideoColorProfileDef}, 0, 0},
 
+	{IT_STRING | IT_SUBMENU, "Stereoscopic 3D...", "Enable Side-by-Side / Top-and-Bottom / Anaglyph / Interlaced / LeiaSR output.",
+		NULL, {.submenu = &OPTIONS_VideoStereoDef}, 0, 0},
+
 	{IT_NOTHING|IT_SPACE, NULL, NULL,
 		NULL, {NULL}, 0, 0},
 

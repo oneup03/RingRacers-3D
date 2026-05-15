@@ -109,6 +109,10 @@ void *hwSym(const char *funcName,void *handle)
 	GETFUNC(LoadCustomShader);
 	GETFUNC(ResetRenderState);
 
+	GETFUNC(SetStereoMode);
+	GETFUNC(ReapplyStereoMode);
+	GETFUNC(ResetStereoMode);
+
 #else //HWRENDER
 	if (0 == strcmp("FinishUpdate", funcName))
 		return funcPointer; //&FinishUpdate;

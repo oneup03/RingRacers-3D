@@ -1255,6 +1255,61 @@ static void GLPerspective(GLfloat fovy, GLfloat aspect)
 	pglMultMatrixf(&m[0][0]);
 }
 
+// Stereoscopic off-axis frustum (Robert Kooima derivation). Replaces the
+// standard symmetric perspective when FTransform::eyeOffset != 0.
+//
+// `iod` is signed; iod > 0 produces a left-shifted camera (= left eye view).
+// `focal` is the convergence-plane distance — objects at `focal` sit at zero
+// parallax (the screen plane); nearer pops out, farther recedes.
+//
+// `skybox_pass` skips the eye translate so the sky gets only the constant
+// frustum shift — that renders at max parallax (= "infinity"), which is what
+// you want for distant geometry that should never separate as you turn.
+static void GLPerspectiveStereo(GLfloat fovy, GLfloat aspect, GLfloat iod, GLfloat focal, boolean skybox_pass)
+{
+	const GLfloat zNear = NEAR_CLIPPING_PLANE;
+	const GLfloat zFar = FAR_CLIPPING_PLANE;
+	const GLfloat radians = (GLfloat)(fovy / 2.0f * M_PIl / 180.0f);
+	const GLfloat sine = sin(radians);
+	const GLfloat deltaZ = zFar - zNear;
+
+	if ((fabsf((float)deltaZ) < 1.0E-36f) || fpclassify(sine) == FP_ZERO || fpclassify(aspect) == FP_ZERO || fpclassify(focal) == FP_ZERO)
+	{
+		return;
+	}
+
+	// tan(fovy/2)
+	const GLfloat horFov = (GLfloat)(sine / cosf(radians));
+	// Frustum half-extents at zNear, symmetric mono.
+	const GLfloat top    =  zNear * horFov;
+	const GLfloat bottom = -top;
+	// Asymmetric horizontal shift in tan-space, sign carried by iod.
+	const GLfloat eyeOffset_tan = -iod * 0.5f / focal;
+	const GLfloat right  =  zNear * (horFov * aspect + eyeOffset_tan);
+	const GLfloat left   = -zNear * (horFov * aspect - eyeOffset_tan);
+
+	GLfloat m[4][4] =
+	{
+		{ 0.0f, 0.0f, 0.0f, 0.0f },
+		{ 0.0f, 0.0f, 0.0f, 0.0f },
+		{ 0.0f, 0.0f, 0.0f,-1.0f },
+		{ 0.0f, 0.0f, 0.0f, 0.0f },
+	};
+	m[0][0] = (2.0f * zNear) / (right - left);
+	m[1][1] = (2.0f * zNear) / (top - bottom);
+	m[2][0] = (right + left) / (right - left);
+	m[2][1] = (top + bottom) / (top - bottom);
+	m[2][2] = -(zFar + zNear) / deltaZ;
+	m[3][2] = -2.0f * zNear * zFar / deltaZ;
+
+	pglMultMatrixf(&m[0][0]);
+
+	// Eye translate: skipping it for the skybox keeps the constant frustum
+	// shift while leaving sky geometry pinned at infinity.
+	if (!skybox_pass)
+		pglTranslatef(-iod * 0.5f, 0.0f, 0.0f);
+}
+
 static void GLProject(GLfloat objX, GLfloat objY, GLfloat objZ,
                       GLfloat* winX, GLfloat* winY, GLfloat* winZ)
 {
@@ -1588,6 +1643,53 @@ EXPORT void HWRAPI(GClipRect) (INT32 minx, INT32 miny, INT32 maxx, INT32 maxy, f
 	// added for new coronas' code (without depth buffer)
 	pglGetIntegerv(GL_VIEWPORT, viewport);
 	pglGetFloatv(GL_PROJECTION_MATRIX, projMatrix);
+}
+
+
+// -----------------+
+// Stereoscopic 3D viewport+scissor control. The cached rect lets
+// ReapplyStereoMode restore the eye region after GClipRect clobbers the
+// viewport — the depth clear that follows GClipRect would otherwise wipe the
+// wrong region (skill pitfall 2).
+// -----------------+
+static boolean cached_stereo_active = false;
+static INT32   cached_stereo_x = 0, cached_stereo_y = 0;
+static INT32   cached_stereo_w = 0, cached_stereo_h = 0;
+
+EXPORT void HWRAPI(SetStereoMode) (INT32 mode, INT32 eye, INT32 x, INT32 y, INT32 w, INT32 h)
+{
+	(void)mode; (void)eye; // unused at this layer; geometry is fully encoded in (x,y,w,h)
+
+	// Top-down Y → GL bottom-up.
+	const GLint gl_y = screen_height - (y + h);
+	pglViewport(x, gl_y, w, h);
+	pglScissor(x, gl_y, w, h);
+	pglEnable(GL_SCISSOR_TEST);
+
+	cached_stereo_active = true;
+	cached_stereo_x = x; cached_stereo_y = gl_y;
+	cached_stereo_w = w; cached_stereo_h = h;
+
+	pglGetIntegerv(GL_VIEWPORT, viewport);
+}
+
+EXPORT void HWRAPI(ReapplyStereoMode) (void)
+{
+	if (!cached_stereo_active)
+		return;
+	pglViewport(cached_stereo_x, cached_stereo_y, cached_stereo_w, cached_stereo_h);
+	pglScissor(cached_stereo_x, cached_stereo_y, cached_stereo_w, cached_stereo_h);
+	pglEnable(GL_SCISSOR_TEST);
+	pglGetIntegerv(GL_VIEWPORT, viewport);
+}
+
+EXPORT void HWRAPI(ResetStereoMode) (void)
+{
+	pglDisable(GL_SCISSOR_TEST);
+	pglColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	pglViewport(0, 0, screen_width, screen_height);
+	cached_stereo_active = false;
+	pglGetIntegerv(GL_VIEWPORT, viewport);
 }
 
 
@@ -3182,6 +3284,12 @@ EXPORT void HWRAPI(DrawModel) (model_t *model, INT32 frameIndex, float duration,
 EXPORT void HWRAPI(SetTransform) (FTransform *stransform)
 {
 	static boolean special_splitscreen;
+	// Cache stereo state so SetTransform(NULL) (used for 2D HUD passes inside
+	// the legacy GL pass) can fall back cleanly to mono.
+	static INT8 stereo_eye_offset = 0;
+	static GLfloat stereo_iod = 0.0f;
+	static GLfloat stereo_focal = 1.0f;
+	static boolean stereo_skybox = false;
 	boolean shearing = false;
 	float used_fov;
 
@@ -3205,11 +3313,17 @@ EXPORT void HWRAPI(SetTransform) (FTransform *stransform)
 
 		special_splitscreen = (stransform->splitscreen == 1);
 		shearing = stransform->shearing;
+
+		stereo_eye_offset = stransform->eyeOffset;
+		stereo_iod        = stransform->iod;
+		stereo_focal      = stransform->focalLength;
+		stereo_skybox     = stransform->skyboxPass;
 	}
 	else
 	{
 		used_fov = fov;
 		pglScalef(1.0f, 1.0f, -1.0f);
+		stereo_eye_offset = 0;
 	}
 
 	pglMatrixMode(GL_PROJECTION);
@@ -3225,7 +3339,21 @@ EXPORT void HWRAPI(SetTransform) (FTransform *stransform)
 		pglTranslatef(0.0f, -fdy/BASEVIDHEIGHT, 0.0f);
 	}
 
-	if (special_splitscreen)
+	// Compose stereo with splitscreen FOV fudge (skill step 4): same 0.8 squash
+	// and 2x aspect that mono splitscreen uses, but route to GLPerspectiveStereo
+	// so the off-axis frustum applies on top.
+	if (stereo_eye_offset != 0)
+	{
+		float fov_used = used_fov;
+		float aspect = ASPECT_RATIO;
+		if (special_splitscreen)
+		{
+			fov_used = atan(tan(used_fov*M_PI/360)*0.8)*360/M_PI;
+			aspect = 2*ASPECT_RATIO;
+		}
+		GLPerspectiveStereo(fov_used, aspect, stereo_iod, stereo_focal, stereo_skybox);
+	}
+	else if (special_splitscreen)
 	{
 		used_fov = atan(tan(used_fov*M_PI/360)*0.8)*360/M_PI;
 		GLPerspective(used_fov, 2*ASPECT_RATIO);

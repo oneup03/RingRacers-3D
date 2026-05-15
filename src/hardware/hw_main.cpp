@@ -21,6 +21,7 @@
 #include "hw_light.h"
 #include "hw_drv.h"
 #include "hw_batching.h"
+#include "hw_stereo.h"
 
 #include "../i_video.h" // for rendermode == render_glide
 #include "../v_video.h"
@@ -5571,6 +5572,15 @@ static void HWR_DrawSkyBackground(player_t *player)
 		HWR_RollTransform(&dometransform, viewroll);
 		dometransform.splitscreen = r_splitscreen;
 
+		// Stereo: sky uses the same eyeOffset/iod/focal so the asymmetric
+		// frustum still applies, but skyboxPass=true skips the eye translate
+		// so the sky sits at max parallax (= "infinity") instead of doubling
+		// up as you turn (skill step 3).
+		dometransform.eyeOffset   = R_GetCurrentPlacementEye();
+		dometransform.iod         = R_GetStereoIOD();
+		dometransform.focalLength = R_GetStereoFocal();
+		dometransform.skyboxPass  = true;
+
 		HWR_GetTexture(texturetranslation[skytexture], skytexture);
 
 		if (gl_sky.texture != texturetranslation[skytexture])
@@ -5687,6 +5697,11 @@ static inline void HWR_ClearView(void)
 	                 (INT32)(gl_viewwindowx + gl_viewwidth),
 	                 (INT32)(gl_viewwindowy + gl_viewheight),
 	                 ZCLIP_PLANE);
+	// GClipRect clobbered the viewport with the player rect, but the scissor
+	// (if SetStereoMode set one) is still the eye region. Restore the cached
+	// eye viewport so the depth clear below is scissored to the right place
+	// (skill pitfall 2).
+	HWD.pfnReapplyStereoMode();
 	HWD.pfnClearBuffer(false, true, 0);
 
 	//disable clip window - set to full size
@@ -5791,7 +5806,12 @@ static void HWR_SetShaderState(void)
 	HWD.pfnSetShader(SHADER_DEFAULT);
 }
 
-static void HWR_RenderViewpoint(player_t *player, boolean drawSkyTexture, boolean timing)
+// `skybox_view` is true when this is the secondary skybox-object viewpoint
+// (HWR_RenderSkyboxView) — every geometry pass below then renders with
+// skyboxPass=true so the off-axis frustum drops its eye translate and the
+// content sits at "infinity" parallax instead of drifting with virtual head
+// motion (skill step 3).
+static void HWR_RenderViewpoint(player_t *player, boolean drawSkyTexture, boolean timing, boolean skybox_view)
 {
 	const float fpov = FIXED_TO_FLOAT(R_FOV(viewssnum)+player->fovadd);
 	postimg_t *type = &postimgtype[viewssnum];
@@ -5853,6 +5873,16 @@ static void HWR_RenderViewpoint(player_t *player, boolean drawSkyTexture, boolea
 	atransform.fovyangle = fpov; // Tails
 	HWR_RollTransform(&atransform, viewroll);
 	atransform.splitscreen = r_splitscreen;
+
+	// Stereoscopic 3D. Off when R_StereoActive() is false (eyeOffset==0 keeps
+	// SetTransform on the mono perspective path). skyboxPass=true for the
+	// secondary skybox-object viewpoint (HWR_RenderSkyboxView) so distant
+	// scenery sits at "infinity" parallax; the dome sky inside HWR_DrawSky-
+	// Background also flips it on transiently.
+	atransform.eyeOffset   = R_GetCurrentPlacementEye();
+	atransform.iod         = R_GetStereoIOD();
+	atransform.focalLength = R_GetStereoFocal();
+	atransform.skyboxPass  = skybox_view;
 
 	gl_fovlud = (float)(1.0l/tan((double)(fpov*M_PIl/360l)));
 
@@ -5963,6 +5993,7 @@ static void HWR_RenderViewpoint(player_t *player, boolean drawSkyTexture, boolea
 	// added by Hurdler for correct splitscreen
 	// moved here by hurdler so it works with the new near clipping plane
 	HWD.pfnGClipRect(0, 0, vid.width, vid.height, NZCLIP_PLANE);
+	HWD.pfnReapplyStereoMode(); // GClipRect clobbered the viewport again
 }
 
 // ==========================================================================
@@ -5973,7 +6004,10 @@ void HWR_RenderSkyboxView(player_t *player)
 	// note: sets viewangle, viewx, viewy, viewz
 	R_SkyboxFrame(viewssnum);
 
-	HWR_RenderViewpoint(player, drawsky, false);
+	// Pass skybox_view=true so the off-axis frustum drops its eye translate —
+	// distant scenery in the skybox should render at "infinity" parallax, not
+	// drift between eyes as the virtual head shifts.
+	HWR_RenderViewpoint(player, drawsky, false, true);
 }
 
 // ==========================================================================
@@ -6019,7 +6053,10 @@ void HWR_RenderPlayerView(void)
 		HWD.pfnSetShaderInfo(HWD_SHADERINFO_LIGHT_BACKLIGHT, maplighting.backlight);
 	}
 
-	if (viewssnum == 0) // Only do it if it's the first screen being rendered
+	// Stereo: D_Display does a once-per-frame full-screen color clear before
+	// the eye loop (with scissor disabled), so the per-eye scissor here would
+	// wipe the other eye's content if we didn't skip it. Skill step 8.
+	if (viewssnum == 0 && !R_StereoActive()) // Only do it if it's the first screen being rendered
 		HWD.pfnClearBuffer(true, false, &ClearColor); // Clear the Color Buffer, stops HOMs. Also seems to fix the skybox issue on Intel GPUs.
 
 	ps_hw_skyboxtime = I_GetPreciseTime();
@@ -6033,7 +6070,8 @@ void HWR_RenderPlayerView(void)
 
 	HWR_RenderViewpoint(player,
 			!skybox && drawsky, // Don't draw the regular sky if there's a skybox
-			true); // Main view is profiled
+			true, // Main view is profiled
+			false); // Not a skybox-object viewpoint
 
 	HWR_DoPostProcessor(player);
 }
@@ -6294,7 +6332,15 @@ void HWR_DoPostProcessor(player_t *player)
 		return;
 
 	// Drunken vision! WooOOooo~
-	if (*type == postimg_water || *type == postimg_heat)
+	//
+	// Skip the legacy vertex-grid warp under stereo: the HWR2
+	// blit_postimg_screens path already applies water/heat via its postimg
+	// fragment shader, and that shader clamps to u_texcoord0_min/max so the
+	// wave stays confined to each eye's UV sub-rect. Running both would
+	// double-distort (and the legacy MakeScreenTexture + PostImgRedraw pair
+	// rewrites legacygl_backbuffer mid-eye-loop, which would corrupt the
+	// internal SbS/TaB layout the composite expects).
+	if (!R_StereoActive() && (*type == postimg_water || *type == postimg_heat))
 	{
 		// 10 by 10 grid. 2 coordinates (xy)
 		float v[SCREENVERTS][SCREENVERTS][2];

@@ -1603,6 +1603,15 @@ TextureDetails Gl2Rhi::get_texture_details(Handle<Texture> texture)
 	return ret;
 }
 
+uintptr_t Gl2Rhi::get_native_texture(Handle<Texture> texture) noexcept
+{
+	// Returns the raw GLuint name. Used by the LeiaSR weaver bridge —
+	// SR::IGLWeaver1::setInputViewTexture wants the texture id directly.
+	if (!texture_slab_.is_valid(texture))
+		return 0;
+	return static_cast<uintptr_t>(texture_slab_[texture].texture);
+}
+
 Rect Gl2Rhi::get_renderbuffer_size(Handle<Renderbuffer> renderbuffer)
 {
 	SRB2_ASSERT(renderbuffer_slab_.is_valid(renderbuffer));
