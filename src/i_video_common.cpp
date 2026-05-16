@@ -266,7 +266,18 @@ void I_FinishUpdate(void)
 
 	rhi->push_default_render_pass(true);
 
-	// Upscale draw the backbuffer (with postprocessing maybe?)
+	// Upscale draw the backbuffer (with postprocessing maybe?). When stereo is
+	// active, disable aspect correction so the SbS / TaB backbuffer fills the
+	// window edge-to-edge. Full-SbS displays (e.g. 3840×1080 panels presenting
+	// half-and-half) need the rendered L/R halves to land on the display's
+	// physical L/R halves — aspect-letterboxing inserts black bars that throw
+	// the split out of alignment. The LeiaSR weaver path also wants a window-
+	// filling signal for the same reason; its blit_rect fallback (line ~349,
+	// taken when the SR runtime is missing) goes through this set_output too.
+	// Mono keeps correct_aspect=true so the 320×200 startup screen isn't
+	// stretched across the desktop. (Skill step 15.)
+	const bool stereo_fill = R_StereoActive();
+	const bool present_correct_aspect = !stereo_fill;
 	if (cv_scr_scale.value != FRACUNIT)
 	{
 		float f = std::max(FixedToFloat(cv_scr_scale.value), 0.f);
@@ -275,17 +286,17 @@ void I_FinishUpdate(void)
 		float x = (vid.realwidth - w) * (0.5f + (FixedToFloat(cv_scr_x.value) * 0.5f));
 		float y = (vid.realheight - h) * (0.5f + (FixedToFloat(cv_scr_y.value) * 0.5f));
 
-		g_hw_state.blit_rect->set_output(x, y, w, h, true, true);
-		g_hw_state.sharp_bilinear_blit_rect->set_output(x, y, w, h, true, true);
-		g_hw_state.crt_blit_rect->set_output(x, y, w, h, true, true);
-		g_hw_state.crtsharp_blit_rect->set_output(x, y, w, h, true, true);
+		g_hw_state.blit_rect->set_output(x, y, w, h, present_correct_aspect, true);
+		g_hw_state.sharp_bilinear_blit_rect->set_output(x, y, w, h, present_correct_aspect, true);
+		g_hw_state.crt_blit_rect->set_output(x, y, w, h, present_correct_aspect, true);
+		g_hw_state.crtsharp_blit_rect->set_output(x, y, w, h, present_correct_aspect, true);
 	}
 	else
 	{
-		g_hw_state.blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, true, true);
-		g_hw_state.sharp_bilinear_blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, true, true);
-		g_hw_state.crt_blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, true, true);
-		g_hw_state.crtsharp_blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, true, true);
+		g_hw_state.blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, present_correct_aspect, true);
+		g_hw_state.sharp_bilinear_blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, present_correct_aspect, true);
+		g_hw_state.crt_blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, present_correct_aspect, true);
+		g_hw_state.crtsharp_blit_rect->set_output(0, 0, vid.realwidth, vid.realheight, present_correct_aspect, true);
 	}
 	g_hw_state.blit_rect->set_texture(g_hw_state.backbuffer->color(), static_cast<uint32_t>(vid.width), static_cast<uint32_t>(vid.height));
 	g_hw_state.sharp_bilinear_blit_rect->set_texture(g_hw_state.backbuffer->color(), static_cast<uint32_t>(vid.width), static_cast<uint32_t>(vid.height));
